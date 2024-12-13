@@ -261,8 +261,10 @@ public class FlinkML {
         private final Map<String, Integer> labels = new HashMap<>();
         // mảng 2 chiều để đếm số lần xuất hiện của 1 token trong 1 label
         private final ArrayList<ArrayList<Integer>> tokenPerLabel = new ArrayList<>();
-        // số lượng văn bản mỗi label
+        // số lượng từ mỗi label
         private final ArrayList<Integer> totalTokenOfLabel = new ArrayList<>();
+        // số lượng văn bản mỗi label
+        private final ArrayList<Integer> totalDocOfLabel = new ArrayList<>();
         private int vocabularySize = 0;
         private int labelsSize = 0;
         private int docCount = 0;
@@ -272,6 +274,8 @@ public class FlinkML {
             for (String label : data.keywords) {
                 this.addToDictionary(label);
                 this.addLabel(label);
+                int index = this.labels.get(label);
+                this.totalDocOfLabel.set(index, this.totalDocOfLabel.get(index) + 1);
             }
 
             for (String token : data.tokens) {
@@ -298,8 +302,15 @@ public class FlinkML {
             }
 
             // Tính xác suất cho từng nhãn
-            ArrayList<Double> countInLabel = new ArrayList<>(Collections.nCopies(this.labelsSize, Math.log(1.0 / this.labelsSize)));
+            ArrayList<Double> countInLabel = new ArrayList<>(Collections.nCopies(this.labelsSize, 0.0));
 
+            // Cập nhật xác suất của mỗi label (tính xác suất của label dựa trên tần suất xuất hiện trong văn bản)
+            for (int i = 0; i < this.labelsSize; ++i) {
+                double labelProbability = (double) this.totalDocOfLabel.get(i) / this.docCount;
+                countInLabel.set(i, Math.log(labelProbability));
+            }
+
+            // Cập nhật xác suất cho mỗi token trong query
             for (Map.Entry<String, Integer> entry : queryVocabulary.entrySet()) {
                 String keyword = entry.getKey();
                 int count = entry.getValue();
@@ -308,8 +319,9 @@ public class FlinkML {
                 for (int i = 0; i < this.labelsSize; ++i) {
                     double probability = countInLabel.get(i);
                     if (this.dictionary.containsKey(keyword)) {
+                        int tokenIndex = this.dictionary.get(keyword);
                         probability += count * Math.log(
-                                (this.tokenPerLabel.get(i).get(this.dictionary.get(keyword)) + 1.0) /
+                                (this.tokenPerLabel.get(i).get(tokenIndex) + 1.0) /
                                         (this.totalTokenOfLabel.get(i) + this.vocabularySize)
                         );
                     }
@@ -362,6 +374,8 @@ public class FlinkML {
 
                 // Thêm vào mảng đếm số token của label
                 this.totalTokenOfLabel.add(0);
+                // Thêm vào 1 label mới đếm số doc
+                this.totalDocOfLabel.add(0);
                 ++labelsSize;
             }
         }
@@ -384,14 +398,5 @@ public class FlinkML {
         public static class Query {
             public List<String> tokens; // Các token trong truy vấn
         }
-    }
-
-    public static class CustomINBData {
-        public String[] keywords;
-        public String[] tokens;
-    }
-
-    public static class Query {
-        public String[] tokens;
     }
 }
