@@ -55,7 +55,8 @@ public class FlinkML {
         DataStream<CustomData> trainingStream = kafkaStream.map(json -> {
             ObjectMapper mapper = new ObjectMapper();
             return mapper.readValue(json, CustomData.class);
-        }).returns(TypeInformation.of(new TypeHint<CustomData>() {}));
+        }).returns(TypeInformation.of(new TypeHint<CustomData>() {
+        }));
 
         // Tạo BroadcastStream từ trainingStream
         BroadcastStream<IncrementalNaiveBayesModel> broadcastStream = trainingStream
@@ -118,7 +119,7 @@ public class FlinkML {
 
                 List<Double> prediction = broadcastModel.predictTop5(features);
                 LOG.info("Real-time prediction by " + broadcastModel.classCounts.size());
-                for(Double label : prediction){
+                for (Double label : prediction) {
                     String labelName = broadcastModel.getLabelName(label);
                     LOG.info("Real-time Prediction: " + labelName + " for tokens: [" + String.join(", ", tokens) + "]");
                     out.collect("Real-time Prediction: " + labelName + " for tokens: [" + String.join(", ", tokens) + "]");
@@ -249,5 +250,148 @@ public class FlinkML {
                     ", tokens=" + Arrays.toString(tokens) +
                     '}';
         }
+    }
+
+    public class INB implements Serializable {
+        private static final long serialVersionUID = 2L;
+
+        // mảng số hóa từ vựng
+        private Map<String, Integer> dictionary = new HashMap<>();
+        // mảng số hóa label
+        private final Map<String, Integer> labels = new HashMap<>();
+        // mảng 2 chiều để đếm số lần xuất hiện của 1 token trong 1 label
+        private final ArrayList<ArrayList<Integer>> tokenPerLabel = new ArrayList<>();
+        // số lượng văn bản mỗi label
+        private final ArrayList<Integer> totalTokenOfLabel = new ArrayList<>();
+        private int vocabularySize = 0;
+        private int labelsSize = 0;
+        private int docCount = 0;
+
+        // Cập nhật mô hình với dữ liệu mới
+        public void update(CustomINBData data) {
+            for (String label : data.keywords) {
+                this.addToDictionary(label);
+                this.addLabel(label);
+            }
+
+            for (String token : data.tokens) {
+                this.addToDictionary(token);
+                for (String label : data.keywords) {
+                    int labelIndex = this.labels.get(label);
+                    int tokenIndex = this.dictionary.get(token);
+
+                    // Cập nhật số lần xuất hiện của token trong nhãn
+                    this.tokenPerLabel.get(labelIndex).set(tokenIndex, this.tokenPerLabel.get(labelIndex).get(tokenIndex) + 1);
+                    this.totalTokenOfLabel.set(labelIndex, this.totalTokenOfLabel.get(labelIndex) + 1);
+                }
+            }
+
+            // Tăng số lượng tài liệu
+            ++this.docCount;
+        }
+
+        // Dự đoán nhãn cho truy vấn
+        public ArrayList<Integer> predict(Query query) {
+            Map<String, Integer> queryVocabulary = new HashMap<>();
+            for (String token : query.tokens) {
+                queryVocabulary.put(token, queryVocabulary.getOrDefault(token, 0) + 1);
+            }
+
+            // Tính xác suất cho từng nhãn
+            ArrayList<Double> countInLabel = new ArrayList<>(Collections.nCopies(this.labelsSize, Math.log(1.0 / this.labelsSize)));
+
+            for (Map.Entry<String, Integer> entry : queryVocabulary.entrySet()) {
+                String keyword = entry.getKey();
+                int count = entry.getValue();
+
+                // Cập nhật xác suất cho từng nhãn
+                for (int i = 0; i < this.labelsSize; ++i) {
+                    double probability = countInLabel.get(i);
+                    if (this.dictionary.containsKey(keyword)) {
+                        probability += count * Math.log(
+                                (this.tokenPerLabel.get(i).get(this.dictionary.get(keyword)) + 1.0) /
+                                        (this.totalTokenOfLabel.get(i) + this.vocabularySize)
+                        );
+                    }
+                    countInLabel.set(i, probability);
+                }
+            }
+
+            // Lấy các nhãn có xác suất cao nhất
+            ArrayList<Integer> topIndexes = new ArrayList<>();
+            PriorityQueue<int[]> maxHeap = new PriorityQueue<>((a, b) -> Double.compare(b[0], a[0]));
+
+            for (int i = 0; i < countInLabel.size(); i++) {
+                maxHeap.add(new int[]{(int) countInLabel.get(i).doubleValue(), i});
+            }
+
+            int topCount = Math.min(5, maxHeap.size());
+            for (int i = 0; i < topCount; i++) {
+                topIndexes.add(Objects.requireNonNull(maxHeap.poll())[1]);
+            }
+
+            return topIndexes;
+        }
+
+        // Thêm token vào từ điển
+        public void addToDictionary(String token) {
+            if (!this.dictionary.containsKey(token)) {
+                this.dictionary.put(token, this.vocabularySize);
+
+                // Thêm hàng mới vào ma trận tokenPerLabel
+                for (ArrayList<Integer> arrayList : this.tokenPerLabel) {
+                    arrayList.add(0);
+                }
+                ++this.vocabularySize;
+            }
+        }
+
+        // Thêm label vào hệ thống
+        public void addLabel(String label) {
+            if (!this.labels.containsKey(label)) {
+                this.labels.put(label, this.labelsSize);
+
+                // Thêm cột mới vào ma trận tokenPerLabel
+                if (!this.tokenPerLabel.isEmpty()) {
+                    int size = this.tokenPerLabel.get(0).size();
+                    ArrayList<Integer> newRow = new ArrayList<>(Collections.nCopies(size, 0));
+                    this.tokenPerLabel.add(newRow);
+                } else {
+                    this.tokenPerLabel.add(new ArrayList<>());
+                }
+
+                // Thêm vào mảng đếm số token của label
+                this.totalTokenOfLabel.add(0);
+                ++labelsSize;
+            }
+        }
+
+        public Map<String, Integer> getDictionary() {
+            return dictionary;
+        }
+
+        public void setDictionary(Map<String, Integer> dictionary) {
+            this.dictionary = dictionary;
+        }
+
+        // CustomINBData là đối tượng chứa dữ liệu huấn luyện
+        public static class CustomINBData {
+            public List<String> keywords; // Nhãn (label)
+            public List<String> tokens;   // Các token trong văn bản
+        }
+
+        // Query là đối tượng chứa dữ liệu truy vấn
+        public static class Query {
+            public List<String> tokens; // Các token trong truy vấn
+        }
+    }
+
+    public static class CustomINBData {
+        public String[] keywords;
+        public String[] tokens;
+    }
+
+    public static class Query {
+        public String[] tokens;
     }
 }
