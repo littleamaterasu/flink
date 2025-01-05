@@ -81,7 +81,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>FlinkML</mainClass>
+                            <mainClass>customClass.FlinkML</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
