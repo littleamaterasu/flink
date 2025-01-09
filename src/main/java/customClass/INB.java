@@ -1,5 +1,8 @@
 package customClass;
 
+import org.apache.commons.math3.util.Pair;
+import org.apache.kafka.common.protocol.types.Field;
+
 import java.io.Serial;
 import java.io.Serializable;
 import java.util.*;
@@ -27,15 +30,30 @@ public class INB implements Serializable {
         // thêm label vào danh sách các label
         for (String label : data.keywords) {
             this.addToDictionary(label);
+
+            // thực hiện thêm label
             this.addLabel(label);
+
+            // index của label
             int index = this.labels.get(label);
+
+            // tăng doc count của label
             this.totalDocOfLabel.set(index, this.totalDocOfLabel.get(index) + 1);
         }
 
+        // thêm vào bộ từ vựng của label
         for (String token : data.tokens) {
+
+            // thêm vào từ điển tổng
             this.addToDictionary(token);
+
+            // thêm vào từng label ứng với keyword
             for (String label : data.keywords) {
+
+                // vị trí của label
                 int labelIndex = this.labels.get(label);
+
+                // vị trí label trong từ điển
                 int tokenIndex = this.dictionary.get(token);
 
                 // Cập nhật số lần xuất hiện của token trong nhãn
@@ -52,7 +70,7 @@ public class INB implements Serializable {
     }
 
     // Dự đoán nhãn cho truy vấn
-    public ArrayList<Integer> predict(Query query) {
+    public ArrayList<String> predict(Query query) {
         Map<String, Integer> queryVocabulary = new HashMap<>();
         for (String token : query.tokens) {
             queryVocabulary.put(token, queryVocabulary.getOrDefault(token, 0) + 1);
@@ -87,16 +105,18 @@ public class INB implements Serializable {
         }
 
         // Lấy các nhãn có xác suất cao nhất
-        ArrayList<Integer> topIndexes = new ArrayList<>();
-        PriorityQueue<int[]> maxHeap = new PriorityQueue<>((a, b) -> Double.compare(b[0], a[0]));
+        ArrayList<String> topIndexes = new ArrayList<>();
+        PriorityQueue<Pair<String, Double>> maxHeap = new PriorityQueue<>(
+                (a, b) -> Double.compare(b.getValue(), a.getValue())
+        );
 
-        for (int i = 0; i < countInLabel.size(); i++) {
-            maxHeap.add(new int[]{(int) countInLabel.get(i).doubleValue(), i});
+        for(Map.Entry<String, Integer> entry : labels.entrySet()){
+            maxHeap.add(new Pair<>(entry.getKey(), countInLabel.get(entry.getValue())));
         }
 
         int topCount = Math.min(5, maxHeap.size());
         for (int i = 0; i < topCount; i++) {
-            topIndexes.add(Objects.requireNonNull(maxHeap.poll())[1]);
+            topIndexes.add(Objects.requireNonNull(maxHeap.poll()).getKey());
         }
 
         return topIndexes;

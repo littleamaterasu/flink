@@ -104,8 +104,10 @@ public class FlinkML {
                                 out.collect(broadcastINB);
                                 broadcastINB.info();
 
-                                // TODO: modify to get array list of label
-                                ArrayList<Integer> topInteger = inb.predict(query);
+                                // (modified to get array list of label)
+                                ArrayList<String> topIndex = inb.predict(query);
+
+                                // TODO: create class response with timestamp, uid, array list of string (topIndex)
 
                                 // TODO: send to kafka with topic "query-res"
                             }
