@@ -2,7 +2,6 @@ package customClass;
 
 import config.Config;
 import org.apache.flink.api.common.state.BroadcastState;
-import org.apache.flink.api.common.state.MapState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.state.ReadOnlyBroadcastState;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
@@ -10,6 +9,9 @@ import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.connector.base.DeliveryGuarantee;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,8 +22,8 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Map;
 
 // Lớp chính
 public class FlinkML {
@@ -33,11 +35,10 @@ public class FlinkML {
             TypeInformation.of(new TypeHint<INB>() {
             })
     );
+    private static final ObjectMapper mapper = new ObjectMapper();
 
     public static void main(String[] args) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-
-        // TODO: get checkpoint from elasticsearch or redis
 
         // Luồng kafka training data
         DataStream<String> kafkaStreamTrainingData = env.fromSource(
@@ -73,27 +74,22 @@ public class FlinkML {
         );
 
         // Luồng data ánh xạ sang customClass.CustomINBData để mô hình sử dụng
-        DataStream<CustomINBData> trainingStream = kafkaStreamTrainingData.map(json -> {
-            ObjectMapper mapper = new ObjectMapper();
-            return mapper.readValue(json, CustomINBData.class);
-        }).returns(TypeInformation.of(new TypeHint<CustomINBData>() {
-        }));
+        DataStream<CustomINBData> trainingStream = kafkaStreamTrainingData.map(json -> mapper.readValue(json, CustomINBData.class))
+                .returns(TypeInformation.of(CustomINBData.class));
 
         // Luồng data ánh xạ sang customClass.Query để thực hiện phân lớp truy vấn
-        DataStream<Query> queryDataStream = kafkaStreamQuery.map(json -> {
-            ObjectMapper mapper = new ObjectMapper();
-            return mapper.readValue(json, Query.class);
-        }).returns(TypeInformation.of(new TypeHint<Query>() {
-        }));
+        DataStream<Query> queryDataStream = kafkaStreamQuery.map(json -> mapper.readValue(json, Query.class))
+                .returns(TypeInformation.of(Query.class));
+
 
         // Đảm bảo kiểu dữ liệu khớp với kiểu định nghĩa của BroadcastState và MapState
-        DataStream<INB> processedStream = queryDataStream
+        DataStream<String> processedStream = queryDataStream
                 .connect(trainingStream.broadcast(inbBroadcast)) // Kết nối với training broadcast
-                .process(new BroadcastProcessFunction<Query, CustomINBData, INB>() {
+                .process(new BroadcastProcessFunction<Query, CustomINBData, String>() {
                     private INB inb = new INB();
 
                     @Override
-                    public void processElement(Query query, ReadOnlyContext ctx, Collector<INB> out) {
+                    public void processElement(Query query, ReadOnlyContext ctx, Collector<String> out) {
                         // Truy cập BroadcastState
                         final ReadOnlyBroadcastState<String, INB> inbBroadcastState = ctx.getBroadcastState(inbBroadcast);
                         try {
@@ -101,15 +97,17 @@ public class FlinkML {
                             final INB broadcastINB = inbBroadcastState.get(inb.getName());
                             if (broadcastINB != null) {
                                 // Xử lý logic nếu tìm thấy INB trong broadcast
-                                out.collect(broadcastINB);
                                 broadcastINB.info();
 
                                 // (modified to get array list of label)
                                 ArrayList<String> topIndex = inb.predict(query);
 
-                                // TODO: create class response with timestamp, uid, array list of string (topIndex)
+                                // response
+                                Response response = new Response(Instant.now().toEpochMilli(), query.uid, topIndex);
+                                String responseJson = response.toString();
 
-                                // TODO: send to kafka with topic "query-res"
+                                // Sử dụng collector để gửi dữ liệu tới Kafka
+                                out.collect(responseJson);  // Gửi responseJson vào output stream
                             }
                         } catch (Exception e) {
                             throw new RuntimeException("Error when processing element", e);
@@ -117,7 +115,7 @@ public class FlinkML {
                     }
 
                     @Override
-                    public void processBroadcastElement(CustomINBData customINBData, Context ctx, Collector<INB> out) {
+                    public void processBroadcastElement(CustomINBData customINBData, Context ctx, Collector<String> out) {
                         // Cập nhật INB từ broadcast element
                         inb.update(customINBData);
 
@@ -131,11 +129,20 @@ public class FlinkML {
                             System.out.println("Exception when updating INB model");
                             throw new RuntimeException("Error when updating BroadcastState", e);
                         }
-
-                        // TODO: save checkpoint to elasticsearch or redis
                     }
                 });
 
+        // brokers
+        String kafkaBootstrapServers = Config.BROKER;
+
+        // topic
+        String topic = "classification";
+
+        // KafkaSink configuration
+        KafkaSink<String> kafkaSink = createKafkaSink(kafkaBootstrapServers, topic);
+
+        // gửi data
+        processedStream.sinkTo(kafkaSink);
 
         // Xử lý dữ liệu sau khi đã nhận broadcast query và training data
         processedStream.print();
@@ -144,4 +151,16 @@ public class FlinkML {
         env.execute("Kafka Stream Processing with Broadcast");
     }
 
+    private static KafkaSink<String> createKafkaSink(String kafkaBootstrapServers, String topic) {
+        return KafkaSink.<String>builder()
+                .setBootstrapServers(kafkaBootstrapServers)
+                .setRecordSerializer(
+                        KafkaRecordSerializationSchema.builder()
+                                .setTopic(topic)
+                                .setValueSerializationSchema(new SimpleStringSchema())
+                                .build()
+                )
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .build();
+    }
 }

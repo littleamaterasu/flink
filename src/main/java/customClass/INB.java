@@ -1,7 +1,6 @@
 package customClass;
 
 import org.apache.commons.math3.util.Pair;
-import org.apache.kafka.common.protocol.types.Field;
 
 import java.io.Serial;
 import java.io.Serializable;
