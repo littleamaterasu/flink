@@ -5,10 +5,10 @@ import java.util.ArrayList;
 // Class Response
 public class Response {
     private long timestamp;
-    private long uid;
+    private String uid;
     private ArrayList<String> classes;
 
-    public Response(long timestamp, long uid, ArrayList<String> classes) {
+    public Response(long timestamp, String uid, ArrayList<String> classes) {
         this.timestamp = timestamp;
         this.uid = uid;
         this.classes = classes;
@@ -18,7 +18,7 @@ public class Response {
         return timestamp;
     }
 
-    public long getUid() {
+    public String getUid() {
         return uid;
     }
 

@@ -19,11 +19,15 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.BroadcastProcessFunction;
 import org.apache.flink.util.Collector;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 
 // Lớp chính
 public class FlinkML {
@@ -40,14 +44,21 @@ public class FlinkML {
     public static void main(String[] args) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
+        final HashSet<TopicPartition> trainingPartitions = new HashSet<>(List.of(
+                new TopicPartition(Config.TRAINING_DATA_TOPIC, Config.PARTITION.get(0))
+        ));
+
+        final HashSet<TopicPartition> queryPartition = new HashSet<>(List.of(
+                new TopicPartition(Config.QUERY_TOPIC, Config.PARTITION.get(0))
+        ));
         // Luồng kafka training data
         DataStream<String> kafkaStreamTrainingData = env.fromSource(
                 KafkaSource.<String>builder()
                         .setBootstrapServers(Config.KAFKA)
-                        .setTopics(Config.TRAINING_DATA_TOPIC)
                         .setGroupId(Config.GROUP_ID)
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setValueOnlyDeserializer(new SimpleStringSchema())
+                        .setPartitions(trainingPartitions)
                         .build(),
                 WatermarkStrategy.noWatermarks(),
                 "Kafka Source Training Data"
@@ -57,10 +68,10 @@ public class FlinkML {
         DataStream<String> kafkaStreamQuery = env.fromSource(
                 KafkaSource.<String>builder()
                         .setBootstrapServers(Config.KAFKA)
-                        .setTopics(Config.QUERY_TOPIC)
                         .setGroupId(Config.GROUP_ID)
-                        .setStartingOffsets(OffsetsInitializer.earliest())
+                        .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST))
                         .setValueOnlyDeserializer(new SimpleStringSchema())
+                        .setPartitions(queryPartition)
                         .build(),
                 WatermarkStrategy.noWatermarks(),
                 "Kafka Source customClass.Query"
@@ -145,7 +156,7 @@ public class FlinkML {
         processedStream.sinkTo(kafkaSink);
 
         // Xử lý dữ liệu sau khi đã nhận broadcast query và training data
-        processedStream.print();
+//        processedStream.print();
 
         // Chạy Flink job
         env.execute("Kafka Stream Processing with Broadcast");

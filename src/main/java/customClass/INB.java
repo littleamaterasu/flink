@@ -28,8 +28,6 @@ public class INB implements Serializable {
     public void update(CustomINBData data) {
         // thêm label vào danh sách các label
         for (String label : data.keywords) {
-            this.addToDictionary(label);
-
             // thực hiện thêm label
             this.addLabel(label);
 
@@ -54,6 +52,10 @@ public class INB implements Serializable {
 
                 // vị trí label trong từ điển
                 int tokenIndex = this.dictionary.get(token);
+
+//                System.out.println("vocab matrix " + this.tokenPerLabel.size() + ' ' + this.tokenPerLabel.get(0).size());
+//                System.out.println("label " + label + " index " + labelIndex);
+//                System.out.println("token " + token + " index " + tokenIndex);
 
                 // Cập nhật số lần xuất hiện của token trong nhãn
                 this.tokenPerLabel.get(labelIndex).set(tokenIndex, this.tokenPerLabel.get(labelIndex).get(tokenIndex) + 1);
@@ -118,12 +120,16 @@ public class INB implements Serializable {
             topIndexes.add(Objects.requireNonNull(maxHeap.poll()).getKey());
         }
 
+        // in ra dự đoán
+        System.out.println(String.join(", ", topIndexes));
+
         return topIndexes;
     }
 
     // Thêm token vào từ điển
     public void addToDictionary(String token) {
         if (!this.dictionary.containsKey(token)) {
+//            System.out.println("add to vocab matrix " + token + " index " + this.vocabularySize);
             this.dictionary.put(token, this.vocabularySize);
 
             // Thêm hàng mới vào ma trận tokenPerLabel
@@ -137,11 +143,12 @@ public class INB implements Serializable {
     // Thêm label vào hệ thống
     public void addLabel(String label) {
         if (!this.labels.containsKey(label)) {
+//            System.out.println("add to label matrix " + label + " index " + this.labelsSize);
             this.labels.put(label, this.labelsSize);
 
             // Thêm cột mới vào ma trận tokenPerLabel
             if (!this.tokenPerLabel.isEmpty()) {
-                int size = this.tokenPerLabel.get(0).size();
+                int size = this.vocabularySize;
                 ArrayList<Integer> newRow = new ArrayList<>(Collections.nCopies(size, 0));
                 this.tokenPerLabel.add(newRow);
             } else {
